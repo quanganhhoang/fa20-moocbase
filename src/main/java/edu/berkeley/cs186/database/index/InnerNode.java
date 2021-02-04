@@ -79,8 +79,9 @@ class InnerNode extends BPlusNode {
     @Override
     public LeafNode get(DataBox key) {
         // TODO(proj2): implement
+        int index = numLessThanEqual(key, this.keys);
 
-        return null;
+        return getChild(index).get(key);
     }
 
     // See BPlusNode.getLeftmostLeaf.
@@ -89,15 +90,47 @@ class InnerNode extends BPlusNode {
         assert(children.size() > 0);
         // TODO(proj2): implement
 
-        return null;
+        return getChild(0).getLeftmostLeaf();
     }
 
     // See BPlusNode.put.
     @Override
     public Optional<Pair<DataBox, Long>> put(DataBox key, RecordId rid) {
         // TODO(proj2): implement
+        int treeOrder = metadata.getOrder();
+        int index = numLessThanEqual(key, this.keys);
+        BPlusNode child = getChild(index);
+        Optional<Pair<DataBox, Long>> p = child.put(key, rid);
 
-        return Optional.empty();
+        if (p.isPresent()) {
+            DataBox splitKey = p.get().getFirst();
+            int splitIndex = numLessThanEqual(splitKey, this.keys);
+            this.keys.add(splitIndex, splitKey);
+            this.children.add(splitIndex+1, p.get().getSecond());
+
+            int nodeKeySize = this.keys.size();
+            if (nodeKeySize <= treeOrder*2) {
+                sync();
+                return Optional.empty();
+            } else {
+                InnerNode splitNode = new InnerNode(
+                        this.metadata,
+                        this.bufferManager,
+                        this.keys.subList(treeOrder+1, nodeKeySize),
+                        this.children.subList(treeOrder+1, this.children.size()),
+                        this.treeContext
+                );
+                DataBox splitRightKey = this.keys.get(treeOrder);
+                this.keys = this.keys.subList(0, treeOrder);
+                this.children = this.children.subList(0, treeOrder+1);
+                sync();
+
+                return Optional.of(new Pair<>(splitRightKey, splitNode.getPage().getPageNum()));
+            }
+        } else {
+            sync();
+            return Optional.empty();
+        }
     }
 
     // See BPlusNode.bulkLoad.
@@ -105,7 +138,40 @@ class InnerNode extends BPlusNode {
     public Optional<Pair<DataBox, Long>> bulkLoad(Iterator<Pair<DataBox, RecordId>> data,
             float fillFactor) {
         // TODO(proj2): implement
+        if (!data.hasNext()) {
+            return Optional.empty();
+        }
 
+        int treeOrder = metadata.getOrder();
+        while (data.hasNext()) {
+            Optional<Pair<DataBox, Long>> p = getChild(this.children.size()-1).bulkLoad(data, fillFactor);
+            if (p.isPresent()) {
+                DataBox key = p.get().getFirst();
+                this.keys.add(key);
+                this.children.add(p.get().getSecond());
+
+                if (this.keys.size() > treeOrder*2) {
+                    InnerNode splitNode = new InnerNode(
+                        this.metadata,
+                        this.bufferManager,
+                        this.keys.subList(treeOrder+1, this.keys.size()),
+                        this.children.subList(treeOrder+1, this.children.size()),
+                        this.treeContext
+                    );
+                    DataBox splitRightKey = this.keys.get(treeOrder);
+                    this.keys = this.keys.subList(0, treeOrder);
+                    this.children = this.children.subList(0, treeOrder+1);
+                    sync();
+
+                    return Optional.of(new Pair<>(splitRightKey, splitNode.getPage().getPageNum()));
+                }
+            } else {
+                sync();
+                return Optional.empty();
+            }
+        }
+
+        sync();
         return Optional.empty();
     }
 
@@ -113,8 +179,9 @@ class InnerNode extends BPlusNode {
     @Override
     public void remove(DataBox key) {
         // TODO(proj2): implement
-
-        return;
+        int index = numLessThanEqual(key, this.keys);
+        this.getChild(index).remove(key);
+        sync();
     }
 
     // Helpers /////////////////////////////////////////////////////////////////

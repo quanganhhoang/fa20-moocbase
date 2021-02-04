@@ -139,7 +139,7 @@ public class BPlusTree {
         // TODO(proj2): implement
         // TODO(proj4_part3): B+ tree locking
 
-        return Optional.empty();
+        return root.get(key).getKey(key);
     }
 
     /**
@@ -192,7 +192,7 @@ public class BPlusTree {
         // TODO(proj2): Return a BPlusTreeIterator.
         // TODO(proj4_part3): B+ tree locking
 
-        return Collections.emptyIterator();
+        return new BPlusTreeIterator(this.root.getLeftmostLeaf(), Optional.empty());
     }
 
     /**
@@ -222,8 +222,9 @@ public class BPlusTree {
         typecheck(key);
         // TODO(proj2): Return a BPlusTreeIterator.
         // TODO(proj4_part3): B+ tree locking
+        LeafNode leftMostGreaterEqual = this.root.get(key);
 
-        return Collections.emptyIterator();
+        return new BPlusTreeIterator(leftMostGreaterEqual, Optional.of(key));
     }
 
     /**
@@ -241,10 +242,19 @@ public class BPlusTree {
         // Note: You should NOT update the root variable directly.
         // Use the provided updateRoot() helper method to change
         // the tree's root if the old root splits.
-
+        Optional<Pair<DataBox, Long>> res = root.put(key, rid);
+        if (res.isPresent()) {
+            Pair<DataBox, Long> p = res.get();
+            BPlusNode newRoot = new InnerNode(
+                this.metadata,
+                this.bufferManager,
+                new ArrayList<>(Collections.singletonList(p.getFirst())),
+                new ArrayList<>(Arrays.asList(root.getPage().getPageNum(), p.getSecond())),
+                this.lockContext
+            );
+            this.updateRoot(newRoot);
+        }
         // TODO(proj4_part3): B+ tree locking
-
-        return;
     }
 
     /**
@@ -270,9 +280,26 @@ public class BPlusTree {
         // Use the provided updateRoot() helper method to change
         // the tree's root if the old root splits.
 
-        // TODO(proj4_part3): B+ tree locking
+        // TODO(qhoang) check if tree is empty
+        while (data.hasNext()) {
+            Optional<Pair<DataBox, Long>> res = root.bulkLoad(data, fillFactor);
+            if (res.isPresent()) {
+                Pair<DataBox, Long> p = res.get();
+                DataBox key = p.getFirst();
+                Long pageNum = p.getSecond();
 
-        return;
+                BPlusNode newRoot = new InnerNode(
+                    this.metadata,
+                    this.bufferManager,
+                    new ArrayList<>(Collections.singletonList(key)),
+                    new ArrayList<>(Arrays.asList(root.getPage().getPageNum(), pageNum)),
+                    this.lockContext
+                );
+                updateRoot(newRoot);
+            }
+        }
+
+        // TODO(proj4_part3): B+ tree locking
     }
 
     /**
@@ -291,7 +318,7 @@ public class BPlusTree {
         // TODO(proj2): implement
         // TODO(proj4_part3): B+ tree locking
 
-        return;
+        this.root.remove(key);
     }
 
     // Helpers /////////////////////////////////////////////////////////////////
@@ -395,19 +422,46 @@ public class BPlusTree {
     // Iterator ////////////////////////////////////////////////////////////////
     private class BPlusTreeIterator implements Iterator<RecordId> {
         // TODO(proj2): Add whatever fields and constructors you want here.
+        private Deque<RecordId> stack;
+        private LeafNode curNode;
+
+        public BPlusTreeIterator(LeafNode curNode, Optional<DataBox> key) {
+            this.curNode = curNode;
+            this.stack = initStack(curNode, key);
+        }
+
+        private Deque<RecordId> initStack(LeafNode node, Optional<DataBox> key) {
+            Deque<RecordId> s = new ArrayDeque<>();
+            if (!key.isPresent()) {
+                s.addAll(node.getRids());
+            } else {
+                DataBox comparedKey = key.get();
+                for (int i = 0; i < node.getKeys().size(); i++) {
+                    if (node.getKeys().get(i).compareTo(comparedKey) >= 0) {
+                        s.addLast(node.getRids().get(i));
+                    }
+                }
+            }
+
+            return s;
+        }
 
         @Override
         public boolean hasNext() {
             // TODO(proj2): implement
-
-            return false;
+            return !this.stack.isEmpty();
         }
 
         @Override
         public RecordId next() {
             // TODO(proj2): implement
+            RecordId res = this.stack.removeFirst();
+            if (this.stack.isEmpty() && curNode.getRightSibling().isPresent()) {
+                curNode = curNode.getRightSibling().get();
+                this.stack = initStack(curNode, Optional.empty());
+            }
 
-            throw new NoSuchElementException();
+            return res;
         }
     }
 }
